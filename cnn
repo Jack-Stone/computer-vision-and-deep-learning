@@ -1,0 +1,155 @@
+# This python file uses the following encoding: utf-8
+
+import time
+import math
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.examples.tutorials.mnist import input_data
+
+# 读取mnist图像
+mnist = input_data.read_data_sets('MNIST_data', one_hot=True)
+
+# 定义超参数
+batch_size = 200
+num_epochs = 20
+num_train, num_feats = mnist.train.images.shape
+num_test = mnist.train.labels.shape[0]
+num_classes = mnist.train.labels.shape[1]
+rate = 1e-4
+
+# W的初始化
+def weight_variable(shape):
+    initial = tf.truncated_normal(shape, stddev=0.1)
+    return tf.Variable(initial)
+
+
+# 偏置b的初始化
+def bias_variable(shape):
+    initial = tf.constant(0.1, shape=shape)
+    return tf.Variable(initial)
+
+
+# 定义卷积运算,strides是四个长度的列表，第一个和最后一个元素一定是1，第二个元素指水平方向跨度，
+# 第三个元素指水平方向跨度
+# strides=[1,1,1,1]表示在水平方向和垂直方向上，patch步长为1
+# padding分为‘SAME’和‘VALID’，其中SAME表示输入和输出特征图大小一致，这是通过在输入图边缘补0得到的
+def conv2d(x,w):
+    return tf.nn.conv2d(x, w, strides=[1, 1, 1, 1], padding='SAME')
+
+
+# 定义最大池化，池化是长宽各减少一半，步长是2，但是SAME，因此图像变为原来四分之一
+def max_pool_2x2(x):
+    return tf.nn.max_pool(x, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
+
+
+def compute_accuracy(v_xs, v_ys):
+    global prediction
+    y_pre = sess.run(prediction, feed_dict={xs:v_xs, keep_prob:1})
+    correct_prediction = tf.equal(tf.arg_max(y_pre,1), tf.arg_max(v_ys,1))
+    accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+    result = sess.run(accuracy, feed_dict={xs:v_xs, ys:v_ys, keep_prob:1})
+    return result
+
+
+xs = tf.placeholder(tf.float32, [None, num_feats], name='x')
+ys = tf.placeholder(tf.float32, [None, num_classes,], name='y_true')
+keep_prob = tf.placeholder(tf.float32,name='dropout_keep_prob')
+# 把图像从784行向量变成28x28x1的矩阵
+x_image = tf.reshape(xs, [-1, int(math.sqrt(num_feats)), int(math.sqrt(num_feats)), 1])
+
+
+# 第一层卷积
+# 卷积核为5x5，单通道，共32个卷积
+w_conv1 = weight_variable([5, 5, 1, 32])
+b_conv1 = bias_variable([32])
+# 先卷积运算，再非线性变换，得到28x28x32特征图
+h_conv1 = tf.nn.relu(conv2d(x_image, w_conv1) + b_conv1)
+# 最大池化，输出特征图变成14x14x32
+h_pool1 = max_pool_2x2(h_conv1)
+
+
+# 第二层卷积
+# 卷积核为5x5,32通道，共64个卷积
+w_conv2 = weight_variable([5, 5, 32, 64])
+b_conv2 = bias_variable([64])
+# 先卷积运算，再非线性变换，得到14x14x64特征图
+h_conv2 = tf.nn.relu(conv2d(h_pool1, w_conv2) + b_conv2)
+# 最大池化，输出特征图变成7x7x64
+h_pool2 = max_pool_2x2(h_conv2)
+
+
+# 第一层全连接层
+# 输入7x7x64，输出1024
+w_fc1 = weight_variable([7*7*64, 1024])
+b_fc1 = bias_variable([1024])
+# 把卷积后得到的7x7x64矩阵，再拉成行向量
+h_pool2_flat = tf.reshape(h_pool2, [-1, 7*7*64])
+h_fc1 = tf.nn.relu(tf.matmul(h_pool2_flat, w_fc1) + b_fc1)
+h_fc1_drop = tf.nn.dropout(h_fc1, keep_prob)
+
+# 第二层全连接层
+# 输入1024， 输出分类数，这里是10
+w_fc2 = weight_variable([1024, num_classes])
+b_fc2 = bias_variable([num_classes])
+logits = tf.matmul(h_fc1_drop, w_fc2) + b_fc2
+# softmax进行分类
+prediction = tf.nn.softmax(logits=logits)
+# 计算交叉熵损失
+cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logits=logits, labels=ys)
+loss = tf.reduce_mean(cross_entropy)
+
+# 优化，减少交叉熵损失
+train = tf.train.AdamOptimizer(learning_rate=rate).minimize(loss)
+
+
+# 开始训练
+# 用mnist中图片总数除以每一批次图片数量得到 批次
+num_batch = int(num_train / batch_size)
+# 建立的一个空数组，用于放每次得到的交叉熵损失
+losses = []
+# 建立两个空数组，分别用于放训练集中的准确率核验证集中的准确率
+train_accs, valid_accs = [], []
+time_start = time.time()
+
+with tf.Session() as sess:
+    sess.run(tf.global_variables_initializer())
+
+    # 共训练20轮次
+    for i in range(num_epochs):
+        total_loss = 0.0
+        # 每次训练又分为若干批次，SDD
+        for _ in range(num_batch):
+            # 将一个批次的图片和图片标签放入batch_xs,batch_ys
+            batch_xs, batch_ys = mnist.train.next_batch(batch_size)
+            # 将数据灌入占位符xs和ys，进行训练，把得到的损失值放入loss_batch
+            _, loss_batch = sess.run([train, loss],
+                                     feed_dict={xs:batch_xs, ys:batch_ys,
+                                                keep_prob:0.5})
+            # 每批次损失值之和就是这一轮次的训练的损失值
+            total_loss += loss_batch
+        # 每一轮次结束分别计算一下模型在训练集和验证集中的准确率，并记录损失值和两个集上的准确率
+        train_acc = compute_accuracy(mnist.test.images, mnist.test.labels)
+        valid_acc = compute_accuracy(mnist.validation.images, mnist.validation.labels)
+
+        losses.append(total_loss)
+        train_accs.append(train_acc)
+        valid_accs.append(valid_acc)
+
+        print "Number of iteration: {}, total_loss = {}, train accuracy = {}, " \
+              "validation accuracy = {}".format(i, total_loss, train_acc, valid_acc)
+
+    # 最后，在测试数据上计算一下准确率
+    test_acc = compute_accuracy(mnist.test.images, mnist.test.labels)
+
+time_end = time.time()
+print "Time used for training: {} seconds.".format(time_end-time_start)
+print "mnist image classification accuracy on test set is {}".format(test_acc)
+
+
+plt.figure()
+plt.title("MNIST 2-LAYER CONV")
+plt.plot(losses, "b-o", linewidth=2)
+plt.grid(True)
+plt.xlabel("Iteration")
+plt.ylabel("Cross-entropy")
+plt.show()
